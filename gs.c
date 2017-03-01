@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <mpi.h>
 
 /*** Skeleton for Lab 1 ***/
 
@@ -107,7 +108,7 @@ void get_input(char filename[])
  
  x = (float *) malloc(num * sizeof(float));
  if( !x)
-  {
+    {
 	printf("Cannot allocate x!\n");
 	exit(1);
   }
