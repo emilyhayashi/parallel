@@ -17,7 +17,7 @@ int num = 0;  /* number of unknowns */
 /****** Function declarations */
 void check_matrix(); /* Check whether the matrix will converge */
 void get_input();  /* Read input from file */
-
+float getNewX(float, int); /*calculates the expression to make a new X*/
 /********************************/
 
 
@@ -145,11 +145,13 @@ void get_input(char filename[])
 /************************************************************/
 
 
+
 int main(int argc, char *argv[])
 {
 
  int i;
  int nit = 0; /* number of iterations */
+ nit++;
 
     
  if( argc != 2)
@@ -168,82 +170,75 @@ int main(int argc, char *argv[])
     */
  //check_matrix();
  
- MPI_Init(NULL, NULL);
+MPI_Init(NULL, NULL);
 
- int my_rank, comm_sz, divide_by, turns;
- double old_x, new_x, new_err, err, total;
- MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
- MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
- int turns = num/comm_sz;
+int my_rank, comm_sz, burden;
+float old_x, new_x, err, total;
+MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+
+burden = num/comm_sz;
+
+int start = my_rank*burden;
+
+int complete = 0;
 while (!complete){
+
   if(my_rank != 0){
-    for(int i = my_rank; i < my_rank+num; i+=num){
-      total = &b[i];
-      for(int j = 0; j < num; j++){
-        if(j == i){
-          divide_by = a[i][j];
-        }
-        else{
-        total -= x[j] * a[i][j];
-        }
+    for(int i = start; i < start+burden; i++){
+
+      old_x = x[i];
+      new_x = getNewX(x[i], i);
+      err = (new_x - old_x)/new_x;
+
+      if(err < 0){
+        err *= -1;
+        err_arr[i] = err;
       }
-    }
-    new_x = total/divide_by;
-    err = (new_x - old_x)/new_x;
-    if(err < 0){
-      err *= -1;
-      MPI_Send(err, 100, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
-    }
-    else{
-      MPI_Send(err, 100, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+      else{
+        err_arr[i] = err;
+      }
+
+      MPI_Send(&new_x, 100, MPI_FLOAT, 0, 0, MPI_COMM_WORLD);
     }
   }
-}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- if(my_rank != 0){
-    old_x = &x[my_rank];
-    //compute the error
-    //send it as a message to rank 0
- }
-
- else{
-    old_x = &x[0];
-    &x[0] = (&b[0] - (&&a[0,1] * &x[1]) - (&&a[0,2] * &x[2]))/a[0,0];
-    new_err = (&x[0] - old_x)/&x[0];
-    if (new_err < 0){
-        err_arr[0] = -1 * new_err;
+  else{
+    float * new_X_arr = (float**)malloc(num * sizeof(float*));
+    for(int i = start; i < burden+rank; i++){
+      old_x = &x[0];
+      new_x = getNewX(&x[i], i);
+      new_X_arr[i] = new_x;
+      err = (new_x - old_x)/new_x;
+    }
+    if (err < 0){
+      err_arr[i] = -1 * err;
     }
     else{
-        err_arr[0] = new_err;
+      err_arr[i] = err;
     }
 
-    //listen for all the new errors, overwrite the array
-    //check if they're all under what they need to be
-        //if they are, end MPI and the program
-        //if they aren't, maybe this should be in a while loop?
+  for(int q = burden; q < num; q++ ){
+    MPI_Recv(&new_x, 100, MPI_FLOAT, q%burden, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    new_X_arr[q] = new_x;
+  }
+
+  &x = &new_X_arr;
+  int passing = 1;
+  for(int i = 0; i < num; i++){
+    if(err_arr[i] > err){
+      passing = 0;
+    }
+  }
+  if(!passing){
+    MPI_Bcast(x, num, MPI_FLOAT, 0, MPI_COMM_WORLD);
+  }
+
+  }
+
  }
+
+MPI_Finalize();
  
  
  /* Writing to the stdout */
@@ -254,5 +249,25 @@ while (!complete){
  printf("total number of iterations: %d\n", nit);
  
  exit(0);
+
+}
+
+float getNewX(float unknown, int index) {
+
+  float divide_by = 0;
+  float sum = &b[index];
+  for(int j = 0; j < num; j++){
+    
+      if(j == index){
+       divide_by = a[index][j];
+      }
+      else{
+        sum -= x[j] * a[index][j];
+      }
+    }
+
+  float newX = sum/divide_by;
+
+  return newX;
 
 }
