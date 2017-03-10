@@ -9,7 +9,6 @@
 float **a; /* The coefficients */
 float *x;  /* The unknowns */
 float *b;  /* The constants */
-float *err_arr; /* An array holding the error values for each unknown*/
 float err; /* The absolute relative error */
 int num = 0;  /* number of unknowns */
 
@@ -17,7 +16,7 @@ int num = 0;  /* number of unknowns */
 /****** Function declarations */
 void check_matrix(); /* Check whether the matrix will converge */
 void get_input();  /* Read input from file */
-float getNewX(float, int); /*calculates the expression to make a new X*/
+float getNewX( int); /*calculates the expression to make a new X*/
 /********************************/
 
 
@@ -88,7 +87,6 @@ void get_input(char filename[])
 
  fscanf(fp,"%d ",&num);
  fscanf(fp,"%f ",&err);
-
  /* Now, time to allocate the matrices and vectors */
  a = (float**)malloc(num * sizeof(float*));
  if( !a)
@@ -137,7 +135,8 @@ void get_input(char filename[])
      fscanf(fp,"%f ",&b[i]);
  }
  
- fclose(fp); 
+ fclose(fp);
+ 
 
 }
 
@@ -148,12 +147,8 @@ void get_input(char filename[])
 
 int main(int argc, char *argv[])
 {
- printf("hello");
  int i;
- int nit = 0; /* number of iterations */
- nit++;
-
-    
+ int nit = 0; /* number of iterations */    
  if( argc != 2)
  {
      printf("Usage: gsref filename\n");
@@ -170,94 +165,121 @@ int main(int argc, char *argv[])
     */
  //check_matrix();
  
-MPI_Init(NULL, NULL);
+  MPI_Init(NULL, NULL);
 
-int my_rank, comm_sz, burden;
-float old_x, new_x, err, total;
-MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+  int my_rank, comm_sz, burden;
+  float old_x, new_x, this_err, total;
+  MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+  MPI_Status status;
+  burden = num/comm_sz;
 
-burden = num/comm_sz;
+  int start = my_rank*burden;
+  int complete = 0;
+  float *sub_err_arr = malloc(sizeof(float) * burden);
+  float *err_arr = NULL;
 
-int start = my_rank*burden;
-
-int complete = 0;
-while (!complete){
-  printf("%d\n", my_rank);
-  if(my_rank != 0){
-    int i;
-    for(i = start; i < start+burden; i++){
-
-      old_x = x[i];
-      new_x = getNewX(x[i], i);
-      err = (new_x - old_x)/new_x;
-
-      if(err < 0){
-        err *= -1;
-        err_arr[i] = err;
-      }
-      else{
-        err_arr[i] = err;
-      }
-
-      MPI_Send(&new_x, 100, MPI_FLOAT, 0, 0, MPI_COMM_WORLD);
-    }
+  err_arr = (float *)malloc(sizeof(float)*num);
+  float *new_X_arr = NULL;
+  if(my_rank == 0){    
+    new_X_arr = (float *)malloc(sizeof(float)*num);
   }
 
-  else{
-    float * new_X_arr = (float*)malloc(num * sizeof(float*));
-    int i;
-    for(i = start; i < burden+my_rank; i++){
-      old_x = x[0];
-      new_x = getNewX(x[i], i);
-      new_X_arr[i] = new_x;
-      err = (new_x - old_x)/new_x;
-    }
-    if (err < 0){
-      err_arr[i] = -1 * err;
+  while (nit < 6){ 
+    nit++;
+    printf("iteration: %d\n", nit);
+    if(my_rank !=0){
+      int k = 0;
+      for(i = start; i < start+burden; i++){
+        old_x = x[i]; 
+        new_x = getNewX(i);
+        this_err = (new_x - old_x)/new_x; 
+        if(this_err >= 0){
+          sub_err_arr[k] = 100*this_err;
+        }
+        else{
+          sub_err_arr[k] = -100*this_err;
+        }
+        printf("old: %f  new: %f\n", old_x, new_x);
+        printf("error: %f\n", sub_err_arr[k]);
+        k++;
+        MPI_Send(&new_x, sizeof(float*), MPI_FLOAT, 0, i, MPI_COMM_WORLD);
+        printf("process %d sent %f\n", my_rank, new_x); 
+      }
+      MPI_Send(sub_err_arr, sizeof(float)*burden, MPI_FLOAT, 0, start, MPI_COMM_WORLD);
     }
     else{
-      err_arr[i] = err;
+      float recv_x =0;
+      float *recv_err_arr = malloc(sizeof(float*)*burden);
+      int i;
+      for(i = start; i < burden+start; i++){
+        old_x = x[i];
+        new_x = getNewX(i);
+        new_X_arr[i] = new_x;
+        this_err = (new_x - old_x)/new_x;
+        if (this_err < 0){
+          err_arr[i] = -100 * this_err;
+        }
+        else{
+          err_arr[i] = 100*this_err;
+        }
+      }   
+      for(i = burden; i < num; i++ ){     
+        MPI_Recv(&recv_x, sizeof(float*), MPI_FLOAT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+        new_X_arr[status.MPI_TAG] = recv_x;
+        printf("process %d received new x: %f at index %d\n", my_rank, new_X_arr[status.MPI_TAG], status.MPI_TAG);
+      }
+      int j;
+      for (i = 1; i < comm_sz; i++){
+        MPI_Recv(sub_err_arr, sizeof(float)*burden, MPI_FLOAT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+        for (j = 0; j < burden; j++){
+          err_arr[status.MPI_TAG + j] = sub_err_arr[j];
+          
+        }
+      }
+      x = new_X_arr;
+
+      complete=1;
+      for(i = 0; i < num; i++){
+        printf("new_x_arr[%d] = %f\n", i, new_X_arr[i]);
+        printf("error[%d] = %f\n", i, err_arr[i]);
+        if(err_arr[i] > err){
+          complete = 0;
+        }
+      }
+      if(!complete){
+       printf("incremented nit\n");
+    MPI_Bcast(x, comm_sz, MPI_FLOAT, 0, MPI_COMM_WORLD);
+      }
+      else{
+        for( i = 0; i < num; i++){
+          printf("%f\n",x[i]);
+        }
+        printf("total number of iterations: %d\n", nit);
+      } 
+    MPI_Barrier(MPI_COMM_WORLD);
+//    MPI_Bcast(err_arr, comm_sz, MPI_FLOAT, 0, MPI_COMM_WORLD);  
     }
-  int q;
-  for(q = burden; q < num; q++ ){
-    MPI_Recv(&new_x, 100, MPI_FLOAT, q%burden, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    new_X_arr[q] = new_x;
-  }
-
-  x = new_X_arr;
-  int passing = 1;
-  for(i = 0; i < num; i++){
-    if(err_arr[i] > err){
-      passing = 0;
-    }
-  }
-  if(!passing){
-    MPI_Bcast(x, num, MPI_FLOAT, 0, MPI_COMM_WORLD);
-  }
 
   }
 
- }
+  printf("rank %d completed\n", my_rank);
 
-MPI_Finalize();
+  MPI_Finalize();   
+  exit(0);
+}
  
  
  /* Writing to the stdout */
  /* Keep that same format */
- for( i = 0; i < num; i++)
-     printf("%f\n",x[i]);
- 
- printf("total number of iterations: %d\n", nit);
- 
- exit(0);
 
-}
 
-float getNewX(float unknown, int index) {
+
+float getNewX(int index) {
 
   float divide_by = 0;
   float sum = b[index];
+  
   int j;
   for(j = 0; j < num; j++){
     
